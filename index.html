@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kp-assistant — прототип подготовки КП</title>
+<style>
+  :root { --border:#d0d7de; --muted:#6a737d; --warn:#b45309; --bg:#f6f8fa; --ok:#1a7f37; --accent:#0969da; }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.45 system-ui, "Segoe UI", Arial, sans-serif; margin:0; color:#1f2328; background:#fff; }
+  header { padding:14px 20px; border-bottom:1px solid var(--border); }
+  header h1 { font-size:16px; margin:0 0 2px; }
+  header .sub { color:var(--muted); font-size:13px; }
+  main { padding:20px; max-width:1020px; }
+  .caption { background:#eef6ff; border:1px solid #cfe3ff; color:#0b4a8f; border-radius:6px; padding:10px 12px; margin-bottom:14px; font-weight:600; }
+  .search { display:flex; gap:8px; }
+  .search input[type=text] { flex:1; padding:9px 12px; border:1px solid var(--border); border-radius:6px; font-size:14px; }
+  .search button { padding:9px 14px; border:1px solid var(--border); background:var(--bg); border-radius:6px; cursor:pointer; }
+  .hint { color:var(--muted); font-size:13px; min-height:18px; margin:8px 0; }
+  .suggestions { border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+  .suggestions:empty { border:none; }
+  .sug { padding:9px 12px; cursor:pointer; border-bottom:1px solid var(--border); display:flex; gap:12px; justify-content:space-between; align-items:center; }
+  .sug:last-child { border-bottom:none; }
+  .sug:hover { background:var(--bg); }
+  .sug .art { color:var(--muted); }
+  .sug .reason { font-size:11px; color:var(--accent); border:1px solid #cfe3ff; border-radius:10px; padding:1px 7px; margin-left:6px; white-space:nowrap; }
+  .sug .right { color:var(--muted); white-space:nowrap; }
+  .msg { margin:12px 0; padding:9px 12px; border-radius:6px; background:#fff8e1; color:#7a4e00; display:none; }
+  .msg.show { display:block; }
+  .legend { color:var(--muted); font-size:12px; margin:14px 0 4px; }
+  .legend .warn { color:var(--warn); }
+  .legend .ok { color:var(--ok); }
+  table { width:100%; border-collapse:collapse; margin-top:4px; }
+  th, td { border:1px solid var(--border); padding:7px 9px; text-align:left; vertical-align:middle; }
+  th { background:var(--bg); font-weight:600; font-size:13px; }
+  td.num, th.num { text-align:right; }
+  tr.new { background:#eafbe7; animation:pop .5s ease; }
+  @keyframes pop { from { background:#c6f0c0; } to { background:#eafbe7; } }
+  .status { font-size:12px; }
+  .status.warn { color:var(--warn); }
+  .status.ok { color:var(--ok); }
+  input.qty { width:66px; padding:5px 6px; border:1px solid var(--border); border-radius:4px; text-align:right; }
+  button.remove { cursor:pointer; color:#b91c1c; border:none; background:none; font-size:14px; }
+  .totals { margin-top:16px; display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
+  .discount { width:74px; padding:5px 6px; border:1px solid var(--border); border-radius:4px; text-align:right; }
+  .grand { font-size:16px; font-weight:700; }
+  .empty { color:var(--muted); text-align:center; padding:14px; }
+  .subtitle { display:none; position:fixed; left:0; right:0; bottom:0; background:#1f2328; color:#fff; padding:14px 26px; font-size:16px; line-height:1.45; }
+  .subtitle.show { display:block; }
+  .subtitle b { color:#8ab4f8; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Подготовка КП — прототип</h1>
+  <div class="sub">Функция «поиск товара в каталоге и добавление позиции». Товары и цены условные.</div>
+</header>
+<main>
+  <div class="caption" id="caption">Готово к работе. Введите название или артикул товара.</div>
+
+  <div class="search">
+    <input type="text" id="q" placeholder="Поиск товара: название или артикул (например, «домкрат», «домкат» или «100-01»)" autocomplete="off">
+    <button id="demo" type="button">▶ Демо</button>
+    <button id="clear" type="button">Очистить</button>
+  </div>
+  <div class="hint" id="hint"></div>
+  <div class="suggestions" id="sug"></div>
+  <div class="msg" id="msg"></div>
+
+  <div class="legend">Статусы строк: <span class="ok">ок</span> · <span class="warn">нет остатка</span> · <span class="warn">нет цены</span> (сумма не считается). Дубликат — количество увеличивается.</div>
+  <table id="kp">
+    <thead>
+      <tr>
+        <th>#</th><th>Артикул</th><th>Наименование</th>
+        <th class="num">Кол-во</th><th class="num">Цена</th><th class="num">Сумма</th><th>Статус</th><th></th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <div class="totals">
+    <div>Скидка: <input type="number" id="disc" class="discount" value="0" min="0" max="100"> %</div>
+    <div id="subtotal"></div>
+    <div id="discountLine"></div>
+    <div class="grand" id="grand"></div>
+  </div>
+</main>
+<div class="subtitle" id="subtitle"></div>
+
+<script>
+const CATALOG = [
+  { article: '100-01', name: 'Домкрат подкатной 3 т',            price: 5400,  stock: 12 },
+  { article: '100-02', name: 'Домкрат подкатной 5 т',            price: 8900,  stock: 4 },
+  { article: '245-77', name: 'Стенд сход-развала 3D',            price: 89000, stock: 0 },
+  { article: '300-10', name: 'Компрессор поршневой 100 л',       price: 32000, stock: 7 },
+  { article: '300-11', name: 'Компрессор поршневой 50 л',        price: 21000, stock: 3 },
+  { article: '410-05', name: 'Балансировочный станок',           price: null,  stock: 5 },
+  { article: '410-06', name: 'Шиномонтажный станок полуавтомат', price: 54000, stock: 2 },
+  { article: '500-01', name: 'Подъёмник двухстоечный 4 т',       price: 145000, stock: 1 }
+];
+
+const kp = [];
+let discount = 0;
+let lastAdded = null;
+
+const $ = (id) => document.getElementById(id);
+const money = (v) => v == null ? '—' : v.toLocaleString('ru-RU') + ' \u20BD';
+
+function norm(s) { return String(s).toLowerCase().replace(/\s+/g, ' ').trim(); }
+
+function bigrams(s) {
+  const set = new Set();
+  for (let i = 0; i < s.length - 1; i++) set.add(s.slice(i, i + 2));
+  return set;
+}
+
+function dice(a, b) {
+  a = norm(a); b = norm(b);
+  if (a === b) return 1;
+  if (a.length < 2 || b.length < 2) return 0;
+  const A = bigrams(a), B = bigrams(b);
+  let inter = 0;
+  A.forEach((x) => { if (B.has(x)) inter++; });
+  return (2 * inter) / (A.size + B.size);
+}
+
+function nameScore(query, name) {
+  const q = norm(query);
+  let best = dice(q, norm(name).replace(/\s/g, ''));
+  norm(name).split(' ').forEach((t) => { best = Math.max(best, dice(q, t)); });
+  return best;
+}
+
+function search(query) {
+  const q = norm(query);
+  if (!q) return [];
+  const scored = CATALOG.map((p) => {
+    const art = norm(p.article), name = norm(p.name);
+    if (art === q) return { p, score: 1000, reason: 'точный артикул' };
+    if (name.includes(q)) return { p, score: 500 + (q.length / name.length) * 10, reason: 'частичное название' };
+    const s = nameScore(q, p.name);
+    if (s >= 0.5) return { p, score: s * 100, reason: 'похоже (учёт опечаток)' };
+    return null;
+  }).filter(Boolean);
+  return scored.sort((a, b) => b.score - a.score).slice(0, 10);
+}
+
+function statusFor(p) {
+  if (p.price == null || p.price === 0) return 'нет цены';
+  if (p.stock <= 0) return 'нет остатка';
+  return '';
+}
+
+function setCaption(text) { $('caption').textContent = text; }
+function setSubtitle(num, text) { $('subtitle').innerHTML = '<b>Шаг ' + num + ' из 13.</b> ' + text; }
+function showHint(text) { $('hint').textContent = text; }
+
+function flash(text) {
+  const m = $('msg');
+  m.textContent = text;
+  m.classList.add('show');
+  clearTimeout(flash._t);
+  flash._t = setTimeout(() => m.classList.remove('show'), 3000);
+}
+
+function renderSuggestions(items) {
+  const box = $('sug');
+  box.innerHTML = '';
+  items.forEach((item) => {
+    const p = item.p;
+    const el = document.createElement('div');
+    el.className = 'sug';
+    const note = p.stock <= 0 ? ' · нет остатка' : (p.price == null ? ' · нет цены' : '');
+    el.innerHTML =
+      '<span><span class="art">' + p.article + '</span> — ' + p.name +
+      ' <span class="reason">' + item.reason + '</span></span>' +
+      '<span class="right">' + money(p.price) + note + '</span>';
+    el.onclick = () => addProduct(p);
+    box.appendChild(el);
+  });
+}
+
+function addProduct(p) {
+  const existing = kp.find((x) => x.article === p.article);
+  if (existing) {
+    existing.qty += 1;
+    lastAdded = p.article;
+    flash('Товар «' + p.name + '» уже в КП — количество увеличено до ' + existing.qty + '.');
+    setCaption('Дубликат: «' + p.name + '» уже в КП — количество увеличено до ' + existing.qty + '.');
+  } else {
+    kp.push(Object.assign({}, p, { qty: 1 }));
+    lastAdded = p.article;
+    setCaption('Добавлено: «' + p.name + '», количество 1.');
+  }
+  $('sug').innerHTML = '';
+  $('q').value = '';
+  showHint('');
+  render();
+}
+
+function render() {
+  const tbody = document.querySelector('#kp tbody');
+  tbody.innerHTML = '';
+  kp.forEach((line, i) => {
+    const st = statusFor(line);
+    const sum = line.price == null ? null : line.price * line.qty;
+    const tr = document.createElement('tr');
+    if (line.article === lastAdded) tr.className = 'new';
+    tr.innerHTML =
+      '<td>' + (i + 1) + '</td>' +
+      '<td>' + line.article + '</td>' +
+      '<td>' + line.name + '</td>' +
+      '<td class="num"><input class="qty" type="number" min="1" value="' + line.qty + '" data-i="' + i + '"></td>' +
+      '<td class="num">' + money(line.price) + '</td>' +
+      '<td class="num">' + money(sum) + '</td>' +
+      '<td class="status ' + (st ? 'warn' : 'ok') + '">' + (st || 'ок') + '</td>' +
+      '<td><button class="remove" data-i="' + i + '" title="Удалить">\u2715</button></td>';
+    tbody.appendChild(tr);
+  });
+  if (kp.length === 0) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td colspan="8" class="empty">Позиции не добавлены. Найдите товар в строке поиска выше.</td>';
+    tbody.appendChild(tr);
+  }
+  tbody.querySelectorAll('input.qty').forEach((inp) => {
+    inp.onchange = () => {
+      const i = Number(inp.dataset.i);
+      const v = Number(inp.value);
+      if (!Number.isInteger(v) || v < 1) {
+        flash('Введите целое число больше 0.');
+        inp.value = kp[i].qty;
+        return;
+      }
+      kp[i].qty = v;
+      lastAdded = kp[i].article;
+      setCaption('Количество изменено на ' + v + ' — сумма по строке пересчитана.');
+      render();
+    };
+  });
+  tbody.querySelectorAll('button.remove').forEach((b) => {
+    b.onclick = () => {
+      const name = kp[Number(b.dataset.i)].name;
+      kp.splice(Number(b.dataset.i), 1);
+      lastAdded = null;
+      setCaption('Удалена строка: «' + name + '».');
+      render();
+    };
+  });
+  renderTotals();
+}
+
+function renderTotals() {
+  const subtotal = kp.reduce((s, l) => s + (l.price == null ? 0 : l.price * l.qty), 0);
+  const discAmt = Math.round(subtotal * discount / 100);
+  $('subtotal').textContent = 'Сумма без скидки: ' + money(subtotal);
+  $('discountLine').textContent = 'Скидка (' + discount + '%): −' + money(discAmt);
+  $('grand').textContent = 'Итого: ' + money(subtotal - discAmt);
+}
+
+$('q').oninput = () => {
+  const value = $('q').value;
+  if (!value.trim()) {
+    setCaption('Введите название или артикул товара.');
+    showHint('');
+    renderSuggestions([]);
+    return;
+  }
+  const items = search(value);
+  if (items.length === 0) {
+    setCaption('«' + value + '» → товар не найден в каталоге.');
+    showHint('Ничего не найдено — проверьте название или артикул.');
+    renderSuggestions([]);
+    return;
+  }
+  const onlyFuzzy = items.every((i) => i.reason === 'похоже (учёт опечаток)');
+  if (onlyFuzzy) {
+    setCaption('«' + value + '» → похожие названия (учёт опечаток), найдено: ' + items.length + '.');
+  } else {
+    setCaption('«' + value + '» → найдено совпадений: ' + items.length + '. Выберите товар.');
+  }
+  showHint('');
+  renderSuggestions(items);
+};
+
+$('clear').onclick = () => {
+  $('q').value = '';
+  $('sug').innerHTML = '';
+  showHint('');
+  setCaption('Готово к работе. Введите название или артикул товара.');
+};
+
+$('disc').oninput = () => {
+  let v = Number($('disc').value);
+  if (!Number.isFinite(v) || v < 0) v = 0;
+  if (v > 100) { v = 100; $('disc').value = '100'; }
+  discount = v;
+  setCaption('Скидка ' + v + ' % — итог пересчитан.');
+  renderTotals();
+};
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const type = (text) => { $('q').value = text; $('q').dispatchEvent(new Event('input')); };
+const addAt = (query, index) => { const items = search(query); if (items[index]) addProduct(items[index].p); };
+
+async function runDemo() {
+  kp.length = 0; discount = 0; $('disc').value = 0; lastAdded = null; $('q').value = '';
+  renderSuggestions([]); render();
+
+  for (let n = 3; n > 0; n--) {
+    setCaption('Демонстрация начнётся через ' + n + '…');
+    await sleep(800);
+  }
+
+  setCaption('Демонстрация прототипа. Товары и цены условные.');
+  await sleep(2500);
+
+  type('100-01'); await sleep(2500); addAt('100-01', 0); await sleep(2500);
+  type('домкрат'); await sleep(2500); addAt('домкрат', 1); await sleep(2500);
+  type('домкат'); await sleep(3000); addAt('домкат', 0); await sleep(3000);
+  kp[0].qty = 3; lastAdded = kp[0].article;
+  setCaption('Количество изменено на 3 — сумма по строке пересчитана.');
+  render(); await sleep(3000);
+  $('disc').value = 5; discount = 5;
+  setCaption('Скидка 5 % — итог пересчитан.');
+  renderTotals(); await sleep(3000);
+  type('245-77'); await sleep(3000); addAt('245-77', 0); await sleep(3000);
+  type('410-05'); await sleep(3000); addAt('410-05', 0); await sleep(3000);
+  type('xyz'); await sleep(3000);
+  type('100-01'); await sleep(2000); addAt('100-01', 0); await sleep(1500); addAt('100-01', 0); await sleep(3000);
+  setCaption('Демонстрация завершена. Работает: нечёткий поиск, добавление, расчёт, статусы. Пока нет: интеграции с каталогом и Битрикс24, выгрузки PDF.');
+}
+
+$('demo').onclick = runDemo;
+if (location.search.indexOf('demo') >= 0) { setTimeout(runDemo, 1500); }
+
+function applyState(n) {
+  kp.length = 0; discount = 0; $('disc').value = 0; lastAdded = null; $('q').value = '';
+  renderSuggestions([]);
+  $('subtitle').classList.add('show');
+  const steps = {
+    1: () => { setCaption('Готово к работе. Введите название или артикул товара.'); setSubtitle(1, 'Внутренний инструмент: менеджер собирает коммерческое предложение из товаров каталога. Товары и цены условные.'); },
+    2: () => { $('q').value = '100-01'; $('q').dispatchEvent(new Event('input')); setSubtitle(2, 'Поиск по точному артикулу — инструмент находит товар в каталоге.'); },
+    3: () => { kp.push(Object.assign({}, CATALOG[0], { qty: 1 })); lastAdded = '100-01'; setCaption('Добавлено: «Домкрат подкатной 3 т», количество 1.'); $('q').value = ''; renderSuggestions([]); setSubtitle(3, 'Из каталога автоматически подставлены наименование, цена и остаток. Количество указывает менеджер.'); },
+    4: () => { $('q').value = 'домкрат'; $('q').dispatchEvent(new Event('input')); setSubtitle(4, 'Поиск по части названия — показаны подходящие товары с причиной совпадения.'); },
+    5: () => { kp.push(Object.assign({}, CATALOG[1], { qty: 1 })); lastAdded = '100-02'; setCaption('Добавлено: «Домкрат подкатной 5 т», количество 1.'); $('q').value = ''; renderSuggestions([]); setSubtitle(5, 'Менеджер сам выбирает нужный вариант из списка — автоматического выбора нет.'); },
+    6: () => { $('q').value = 'домкат'; $('q').dispatchEvent(new Event('input')); setSubtitle(6, 'Даже с опечаткой в названии инструмент находит товары — нечёткое сравнение.'); },
+    7: () => { kp[0].qty = 2; lastAdded = '100-01'; setCaption('Дубликат: «Домкрат подкатной 3 т» уже в КП — количество увеличено до 2.'); $('q').value = ''; renderSuggestions([]); setSubtitle(7, 'Повторное добавление не создаёт вторую строку — количество увеличивается.'); },
+    8: () => { kp[0].qty = 3; lastAdded = '100-01'; setCaption('Количество изменено на 3 — сумма по строке пересчитана.'); setSubtitle(8, 'Изменение количества мгновенно пересчитывает сумму по строке.'); },
+    9: () => { $('disc').value = 5; discount = 5; setCaption('Скидка 5 % — итог пересчитан.'); setSubtitle(9, 'Скидку задаёт менеджер; скидка и итог считаются автоматически.'); },
+    10: () => { kp.push(Object.assign({}, CATALOG[2], { qty: 1 })); lastAdded = '245-77'; setCaption('Добавлено: «Стенд сход-развала 3D» — статус «нет остатка».'); setSubtitle(10, 'Товар без остатка добавляется, но помечается предупреждением — решение за менеджером.'); },
+    11: () => { kp.push(Object.assign({}, CATALOG[5], { qty: 1 })); lastAdded = '410-05'; setCaption('Добавлено: «Балансировочный станок» — статус «нет цены», сумма не считается.'); setSubtitle(11, 'Если цены нет, строка помечается, сумма не считается — ошибку в КП не пропускаем.'); },
+    12: () => { $('q').value = 'xyz'; $('q').dispatchEvent(new Event('input')); setSubtitle(12, 'Ненайденный товар: понятное сообщение, пустая строка не добавляется.'); },
+    13: () => { $('q').value = ''; renderSuggestions([]); setCaption('Демонстрация завершена. Работает: нечёткий поиск, добавление, расчёт, статусы. Пока нет: интеграции с каталогом и Битрикс24, выгрузки PDF.'); setSubtitle(13, 'Итог: что работает и чего пока нет — честные границы первой версии.'); }
+  };
+  for (let i = 1; i <= n; i++) { if (steps[i]) steps[i](); }
+  render();
+}
+
+const params = new URLSearchParams(location.search);
+if (params.has('s')) { applyState(Number(params.get('s'))); }
+
+render();
+</script>
+</body>
+</html>
